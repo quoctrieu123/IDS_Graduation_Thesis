@@ -21,3 +21,4 @@ ip-files-fillna-http/
 ip-files-fillna-tcp/
 oof/cnn_bilstm_oof/
 oof/gat_xg_boost_oof/
+venv/
