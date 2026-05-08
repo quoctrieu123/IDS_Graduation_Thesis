@@ -22,3 +22,4 @@ ip-files-fillna-tcp/
 oof/cnn_bilstm_oof/
 oof/gat_xg_boost_oof/
 venv/
+tcp_based_training_model/saved_models_xids/
