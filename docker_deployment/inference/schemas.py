@@ -1,3 +1,4 @@
+# file giúp kiểm duyệt dữ liệu đầu vào từ topic "processed flow" của Kafka, đảm bảo chỉ những gói tin hợp lệ mới được đưa vào pipeline suy luận
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional
 
@@ -194,7 +195,8 @@ class ProcessedFlow(BaseModel):
         if v <= 0:
             raise ValueError(f"Lỗi: Timestamp không hợp lệ ({v})")
         return v
-        
+    
+    # kiểm tra các cột "network_packet_size" để đảm bảo không có giá trị NaN hoặc Infinity lọt qua
     @field_validator('network_packet_size_avg', 'network_packet_size_max', 'network_packet_size_min')
     @classmethod
     def check_not_nan(cls, v):
@@ -204,6 +206,7 @@ class ProcessedFlow(BaseModel):
             raise ValueError("Dữ liệu chứa NaN hoặc Infinity")
         return v
 
+    # hàm đổi toàn bộ các feature (trừ timestamp, label, network_ips_dst, network_ips_src, network_ports_dst, network_ports_src) thành một list float để dễ dàng biến thành PyTorch Tensor
     def to_tensor_list(self) -> list:
         """
         Hàm tiện ích giúp xuất toàn bộ đặc trưng (loại trừ timestamp và label)

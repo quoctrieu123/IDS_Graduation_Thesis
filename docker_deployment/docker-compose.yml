@@ -1,3 +1,9 @@
+# file khởi tạo 4 container chính cho NIDS:
+# Zookeeper: quản lý Kafka Cluster
+#InfluxDB: Lưu kết quả dự đoán
+# Kafka: Nhận stream data từ Data Generator
+# grafana: giám sát kết quả dự đoán qua dashboard
+
 version: '3.8'
 
 # Định nghĩa mạng nội bộ cho các container giao tiếp với nhau

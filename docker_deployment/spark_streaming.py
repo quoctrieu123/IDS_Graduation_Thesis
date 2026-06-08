@@ -1,3 +1,5 @@
+# file tiền xử lý dữ liệu
+# đọc dữ liệu từ kafka topic raw_flows, tiền xử lý, và đẩy vào topic processed_flows
 import pandas as pd
 import numpy as np
 import ast
@@ -9,14 +11,20 @@ from spark_schema import raw_schema, output_schema
 import pyspark
 import os
 import sys
+import traceback
+import datetime
+from pyspark.sql.types import (
+    StructType, StructField, StringType, FloatType, 
+    IntegerType, DoubleType, LongType, BooleanType
+)
 os.environ["HADOOP_HOME"] = r'C:\hadoop-3.0.0'
 os.environ["PATH"] = os.environ["HADOOP_HOME"] + r'\bin;' + os.environ["PATH"]
 # Cấu hình cứng để luôn gọi đúng thư viện của bản 3.5.1
 os.environ["PYSPARK_PYTHON"] = sys.executable
 os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
+os.environ["ARROW_DEFAULT_MEMORY_POOL"] = "system"
 
-
-kafka_package = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1"
+kafka_package = "org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1"
 
 spark = SparkSession.builder \
     .appName("CCIOT_Streaming_Preprocessor") \
@@ -27,9 +35,12 @@ spark = SparkSession.builder \
 # 2. ĐỊNH NGHĨA SCHEMA (Mô phỏng)
 # ==========================================
 # Schema đầu vào (từ Topic raw_flows) - Thay bằng cấu trúc file parquet gốc của bạn
+# đối với các cột thừa trong raw_schema, sẽ tự động bỏ qua
+# đối với các cột thiếu, giá trị được điền là null
 raw_schema = raw_schema  # Đã được định nghĩa trong spark_schema.py, đảm bảo khớp với cấu trúc JSON từ Kafka
 
-# Schema đầu ra (từ hàm mapInPandas ra Topic processed_flows) - Phải khớp 138 cột
+# đối với các cột thiếu: báo lỗi runtime error
+# đối với các cột thừa: tự động bỏ qua
 output_schema = output_schema  # Đã được định nghĩa trong spark_schema.py, đảm bảo có đủ 138 cột sau khi xử lý
 
 # ==========================================
@@ -52,68 +63,118 @@ def map_to_frequent(proto_list,freq_set):
             res.add("other")
     return list(res)
 
+def log_to_worker_file(msg):
+    # Chọn một đường dẫn an toàn trên máy bạn để lưu log
+    log_path = r"C:\Users\Admin\Downloads\spark_worker_debug.log"
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(f"[{datetime.datetime.now()}] {msg}\n")
+
 def preprocess_micro_batch(iterator):
+    log_to_worker_file("Khởi động Worker mới...")
     # Khởi tạo artifacts một lần trên mỗi Worker để tối ưu RAM
-    scaler = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\quantile_scaler.pkl")
-    cols_to_drop = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\cols_to_drop.pkl")
-    numeric_cols = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\numeric_columns.pkl")
-    # Load các MultiLabelBinarizer đã fit từ lúc train
-    mlb_log = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\mlb_log_data_types.pkl")
-    mlb_src = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\mlb_network_protocols_src.pkl")
-    mlb_dst = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\mlb_network_protocols_dst.pkl")
-    freq_src_protos = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\freq_network_protocols_src.pkl")
-    freq_dst_protos = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\freq_network_protocols_dst.pkl")
+    try:
+        scaler = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\quantile_scaler.pkl")
+        cols_to_drop = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\cols_to_drop.pkl")
+        numeric_cols = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\numeric_columns.pkl")
+        # Load các MultiLabelBinarizer đã fit từ lúc train
+        mlb_log = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\mlb_log_data_types.pkl")
+        mlb_src = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\mlb_network_protocols_src.pkl")
+        mlb_dst = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\mlb_network_protocols_dst.pkl")
+        freq_src_protos = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\freq_network_protocols_src.pkl")
+        freq_dst_protos = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\freq_network_protocols_dst.pkl")
+    except Exception as e:
+        log_to_worker_file(f"Lỗi khi loat model: {traceback.format_exc()}")
+        raise e
+    expected_cols = output_schema.fieldNames()
     
     for pdf in iterator:
         if pdf.empty:
             yield pdf
             continue
-        current_drop = [c for c in cols_to_drop if c in pdf.columns]
-        pdf.drop(columns=current_drop, inplace=True, errors='ignore')
+        try:
+            log_to_worker_file(f"-> Nhận micro-batch với {len(pdf)} dòng. Số cột ban đầu: {len(pdf.columns)}")
+            current_drop = [c for c in cols_to_drop if c in pdf.columns]
+            pdf.drop(columns=current_drop, inplace=True, errors='ignore')
 
+                
+            # B. Parse list và áp dụng One-hot encoding (MultiLabelBinarizer)
+            if 'log_data-types' in pdf.columns:
+                parsed = pdf['log_data-types'].apply(parse_string_to_list)
+                bin_matrix = mlb_log.transform(parsed)
+                new_cols = [f"log_type_{c}" for c in mlb_log.classes_]
+                df_bin = pd.DataFrame(bin_matrix, columns=new_cols, index=pdf.index)
+                pdf = pd.concat([pdf, df_bin], axis=1).drop(columns=['log_data-types'])
+
+            if 'network_protocols_src' in pdf.columns:
+                parsed = pdf['network_protocols_src'].apply(parse_string_to_list)
+                grouped = parsed.apply(lambda x: map_to_frequent(x, freq_src_protos))
+                bin_matrix = mlb_src.transform(grouped)
+                new_cols = [f"src_proto_{c}" for c in mlb_src.classes_]
+                df_bin = pd.DataFrame(bin_matrix, columns=new_cols, index=pdf.index)
+                pdf = pd.concat([pdf, df_bin], axis=1).drop(columns=['network_protocols_src'])
+
+            if 'network_protocols_dst' in pdf.columns:
+                parsed = pdf['network_protocols_dst'].apply(parse_string_to_list)
+                grouped = parsed.apply(lambda x: map_to_frequent(x, freq_dst_protos))
+                bin_matrix = mlb_dst.transform(grouped)
+                new_cols = [f"dst_proto_{c}" for c in mlb_dst.classes_]
+                df_bin = pd.DataFrame(bin_matrix, columns=new_cols, index=pdf.index)
+                pdf = pd.concat([pdf, df_bin], axis=1).drop(columns=['network_protocols_dst'])
+            log_to_worker_file("-> Xong phần parse list và One-hot.")
+            if "timestamp_start" in pdf.columns:
+                pdf.rename(columns={"timestamp_start": "timestamp"}, inplace=True)
+
+
+            # E. Lấy danh sách cột số và áp dụng QuantileTransformer
+            current_numeric_cols = numeric_cols.copy()
+            if 'label' in current_numeric_cols: current_numeric_cols.remove('label')
+            if 'timestamp' in current_numeric_cols: current_numeric_cols.remove('timestamp')
             
-        # B. Parse list và áp dụng One-hot encoding (MultiLabelBinarizer)
-        if 'log_data-types' in pdf.columns:
-            parsed = pdf['log_data-types'].apply(parse_string_to_list)
-            bin_matrix = mlb_log.transform(parsed)
-            new_cols = [f"log_type_{c}" for c in mlb_log.classes_]
-            df_bin = pd.DataFrame(bin_matrix, columns=new_cols, index=pdf.index)
-            pdf = pd.concat([pdf, df_bin], axis=1).drop(columns=['log_data-types'])
-
-        if 'network_protocols_src' in pdf.columns:
-            parsed = pdf['network_protocols_src'].apply(parse_string_to_list)
-            grouped = parsed.apply(lambda x: map_to_frequent(x, freq_src_protos))
-            bin_matrix = mlb_src.transform(grouped)
-            new_cols = [f"src_proto_{c}" for c in mlb_src.classes_]
-            df_bin = pd.DataFrame(bin_matrix, columns=new_cols, index=pdf.index)
-            pdf = pd.concat([pdf, df_bin], axis=1).drop(columns=['network_protocols_src'])
-
-        if 'network_protocols_dst' in pdf.columns:
-            parsed = pdf['network_protocols_dst'].apply(parse_string_to_list)
-            grouped = parsed.apply(lambda x: map_to_frequent(x, freq_dst_protos))
-            bin_matrix = mlb_dst.transform(grouped)
-            new_cols = [f"dst_proto_{c}" for c in mlb_dst.classes_]
-            df_bin = pd.DataFrame(bin_matrix, columns=new_cols, index=pdf.index)
-            pdf = pd.concat([pdf, df_bin], axis=1).drop(columns=['network_protocols_dst'])
-
-        if "timestamp_start" in pdf.columns:
-            pdf.rename(columns={"timestamp_start": "timestamp"}, inplace=True)
-
-
-        # E. Lấy danh sách cột số và áp dụng QuantileTransformer
-        numeric_cols = numeric_cols
-        if 'label' in numeric_cols: numeric_cols.remove('label')
-        if 'timestamp' in numeric_cols: numeric_cols.remove('timestamp')
-        
-        # Đảm bảo thứ tự cột numeric khớp với lúc fit scaler
-        # (Khuyến nghị: Nên lưu danh sách numeric_cols lúc train ra joblib và dùng lại ở đây)
-        pdf[numeric_cols] = scaler.transform(pdf[numeric_cols])
-        
-        expected_cols = output_schema.fieldNames()
-        pdf = pdf[expected_cols].fillna(0)
-        # Trả về dataframe Pandas cho Spark
-        yield pdf
-
+            valid_numeric_cols = [c for c in current_numeric_cols if c in pdf.columns]
+            log_to_worker_file(f"-> Chuẩn bị scale {len(valid_numeric_cols)} cột numeric.")
+            if valid_numeric_cols:
+                pdf[valid_numeric_cols] = scaler.transform(pdf[valid_numeric_cols])
+            log_to_worker_file("-> Scale thành công. Chuẩn bị mapping Schema.")
+            pdf = pdf.reindex(columns=expected_cols, fill_value=0)
+            for field in output_schema.fields:
+                col_name = field.name
+                
+                # Bắt buộc ép về đúng type của Spark Arrow
+                if isinstance(field.dataType, IntegerType):
+                    pdf[col_name] = pdf[col_name].fillna(0).astype('int32')
+                    
+                elif isinstance(field.dataType, LongType):
+                    pdf[col_name] = pdf[col_name].fillna(0).astype('int64')
+                    
+                elif isinstance(field.dataType, FloatType):
+                    pdf[col_name] = pdf[col_name].fillna(0.0).astype('float32')
+                    
+                elif isinstance(field.dataType, DoubleType):
+                    pdf[col_name] = pdf[col_name].fillna(0.0).astype('float64')
+                    
+                elif isinstance(field.dataType, BooleanType):
+                    pdf[col_name] = pdf[col_name].fillna(False).astype(bool)
+                    
+                elif isinstance(field.dataType, StringType):
+                    pdf[col_name] = pdf[col_name].fillna("").astype(str)
+                else:
+                    log_to_worker_file(f"CẢNH BÁO NGHIÊM TRỌNG: Cột '{col_name}' có kiểu {field.dataType} chưa được ép kiểu!")
+            pdf.reset_index(drop=True, inplace=True) 
+            log_to_worker_file(f"-> Hoàn tất batch. Chuẩn bị yield {len(pdf.columns)} cột.")
+            #expected_cols = output_schema.fieldNames()
+            #pdf = pdf[expected_cols].fillna(0)
+            # Trả về dataframe Pandas cho Spark
+            pdf_contiguous = pdf.copy()
+            yield pdf_contiguous
+        except Exception as e:
+            error_details = (
+                f"\n!!! CRASH TRONG QUÁ TRÌNH XỬ LÝ BATCH !!!\n"
+                f"Lỗi: {str(e)}\n"
+                f"Chi tiết (Traceback):\n{traceback.format_exc()}\n"
+                f"Danh sách các cột hiện tại lúc bị crash:\n{list(pdf.columns)}\n"
+            )
+            log_to_worker_file(error_details)
+            raise e # Vẫn ném lỗi ra ngoài để Spark biết luồng này hỏng
 # ==========================================
 # 4. KẾT NỐI LUỒNG KAFKA VÀ CHẠY
 # ==========================================
@@ -122,6 +183,7 @@ df_kafka = spark.readStream \
     .format("kafka") \
     .option("kafka.bootstrap.servers", "localhost:9092") \
     .option("subscribe", "raw_flows") \
+    .option("startingOffsets", "earliest") \
     .load()
 
 # Parse JSON

@@ -1,5 +1,7 @@
+# định nghĩa cấu trúc schema từ kafka vào spark và schema sau khi đã được xử lý
 from pyspark.sql.types import StructType, StructField, FloatType, IntegerType, StringType, DoubleType
 
+# schema của dữ liệu thô khi đọc từ Kafka (chưa xử lý)
 raw_schema = StructType([
     StructField("device_name", DoubleType(), True),
     StructField("device_mac", StringType(), True),
@@ -8,7 +10,7 @@ raw_schema = StructType([
     StructField("label3", StringType(), True),
     StructField("label4", StringType(), True),
     StructField("timestamp", StringType(), True),
-    StructField("timestamp_start", StringType(), True),
+    StructField("timestamp_start", DoubleType(), True),
     StructField("timestamp_end", StringType(), True),
     StructField("log_data-ranges_avg", FloatType(), True),
     StructField("log_data-ranges_max", FloatType(), True),
@@ -96,6 +98,7 @@ raw_schema = StructType([
     StructField("network_window-size_std_deviation", FloatType(), True),
 ])
 
+# schema của dữ liệu sau khi đã được xử lý 
 output_schema = StructType([
     StructField("timestamp", DoubleType(), True),
     StructField("log_data-ranges_avg", FloatType(), True),

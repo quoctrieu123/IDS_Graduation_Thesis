@@ -5,7 +5,7 @@ from torch_geometric.nn import GATv2Conv
 from torch_geometric.utils import dropout_edge
 
 class GAT_Embedder(torch.nn.Module):
-    def __init__(self, in_channels=137, hidden_channels=64, embedding_dim=128, num_classes=8, heads=4, edge_dropout=0.1, edge_dim=5):
+    def __init__(self, in_channels=137, hidden_channels=64, embedding_dim=32, num_classes=8, heads=4, edge_dropout=0.1, edge_dim=5):
         super(GAT_Embedder, self).__init__()
         self.edge_dropout = edge_dropout 
         self.conv1 = GATv2Conv(in_channels, hidden_channels, heads=heads, dropout=0.1, edge_dim=edge_dim)
@@ -19,7 +19,10 @@ class GAT_Embedder(torch.nn.Module):
         # Do đó dropout_edge và F.dropout sẽ tự động bị vô hiệu hóa, giữ nguyên dữ liệu 100%
         edge_index_dp, edge_mask = dropout_edge(edge_index, p=self.edge_dropout, force_undirected=False, training=self.training)
         edge_attr_dp = edge_attr[edge_mask] if edge_attr is not None else None
-        
+        if edge_attr is not None:
+            edge_attr_dp = edge_attr[edge_mask.to(edge_attr.device)] 
+        else:
+            edge_attr_dp = None
         x = F.dropout(x, p=0.4, training=self.training) 
         x = self.conv1(x, edge_index_dp, edge_attr=edge_attr_dp)
         x = self.bn1(x)

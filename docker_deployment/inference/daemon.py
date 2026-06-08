@@ -18,10 +18,10 @@ from models.ensemble import EnsembleManager
 # Cấu hình luồng
 CHUNK_SIZE = 256
 KAFKA_TOPIC = "processed_flows"
-KAFKA_SERVER = os.getenv("KAFKA_SERVER", "kafka:29092") # 29092 là port nội bộ của Docker Network
+KAFKA_SERVER = os.getenv("KAFKA_SERVER", "localhost:9092")
 
 # Cấu hình InfluxDB
-INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://influxdb:8086")
+INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://localhost:8086")
 INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "nids_org")
 INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "nids_bucket")
 # Trong InfluxDB v2, ta dùng Token thay cho user:pass
@@ -39,7 +39,7 @@ def main():
     # 2. KHỞI TẠO CÁC MODULE AI
     logger.info("Đang nạp trọng số mô hình vào VRAM...")
     buffer_manager = BufferManager(seq_time_steps=10, graph_window_size=50, max_dt=30.0)
-    
+    # khơi tạo các mô hình
     try:
         ensemble_manager = EnsembleManager(device=device)
     except Exception as e:
@@ -55,21 +55,30 @@ def main():
     consumer = KafkaConsumer(
         KAFKA_TOPIC,
         bootstrap_servers=[KAFKA_SERVER],
+        group_id='inference_group_replay_3',
         value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-        auto_offset_reset='latest' # Đọc luồng mới nhất để tránh độ trễ tích lũy
+        auto_offset_reset='earliest', # Đọc luồng mới nhất để tránh độ trễ tích lũy
+        enable_auto_commit=True,
     )
     
     # Bộ đệm tạm thời để gom đủ CHUNK_SIZE
     current_chunk = []
+    current_chunk_meta = []
     
     logger.info("🎧 Bắt đầu lắng nghe luồng dữ liệu mạng...")
 
     # 5. VÒNG LẶP SUY LUẬN (INFERENCE LOOP)
     for message in consumer:
         try:
-            # Pydantic kiểm duyệt dữ liệu rác (Gatekeeper)
+            # tạo pydantic để kiểm duyệt dữ liệu
             flow = ProcessedFlow(**message.value)
             current_chunk.append(flow)
+            current_chunk_meta.append({
+                "flow_id": f"{message.topic}-{message.partition}-{message.offset}",
+                "topic": message.topic,
+                "partition": message.partition,
+                "offset": message.offset,
+            })
             
         except ValidationError as e:
             logger.warning(f"Bỏ qua gói tin lỗi định dạng: {e.errors()[0]['msg']}")
@@ -79,10 +88,11 @@ def main():
         if len(current_chunk) == CHUNK_SIZE:
             # a. Xây dựng Đầu vào (Tensors & Graphs)
             seq_x, graph_x, edge_idx, edge_attr, target_idx = buffer_manager.build_inputs(current_chunk)
+            logger.info("Build input stats: %s", buffer_manager.last_build_stats)
             
             # Nếu seq_x là None nghĩa là hệ thống mới bật, chưa đủ 10 lịch sử
             if seq_x is not None:
-                # b. Suy luận (Inference qua nhánh Deep Learning và Meta-Learner)
+                # chạy infer cho cả hệ thống
                 predictions = ensemble_manager.predict(seq_x, graph_x, edge_idx, edge_attr, target_idx)
                 
                 # c. Ghi kết quả vào InfluxDB (Batch Writing)
@@ -91,23 +101,29 @@ def main():
                 num_preds = len(predictions)
                 # Các flow hợp lệ nằm ở cuối của current_chunk
                 valid_flows = current_chunk[-num_preds:]
+                valid_meta = current_chunk_meta[-num_preds:]
                 
-                for flow, pred in zip(valid_flows, predictions):
+                # tạo các point để batch write vào influxdb
+                for flow, meta, pred in zip(valid_flows, valid_meta, predictions):
                     point = Point("network_flow") \
+                        .tag("flow_id", meta["flow_id"]) \
                         .tag("src_ip", flow.network_ips_src) \
                         .tag("dst_ip", flow.network_ips_dst) \
                         .field("predicted_label", int(pred)) \
+                        .field("kafka_partition", int(meta["partition"])) \
+                        .field("kafka_offset", int(meta["offset"])) \
                         .time(int(flow.timestamp * 1e9), WritePrecision.NS) # Ghi chuẩn xác tới nano-giây
                     points.append(point)
                 
-                # Bắn 1 cục toàn bộ 256 dự đoán lên InfluxDB cực nhanh
+                # ghi batch vào influxdb
                 write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=points)
                 logger.info(f"✅ Đã xử lý và đẩy {num_preds} kết quả dự đoán lên InfluxDB.")
             else:
                 logger.info("⏳ Chunk đầu tiên đang gom lịch sử, chưa thực hiện dự đoán.")
             
-            # d. Dọn rác bộ đệm để hứng 256 gói tin tiếp theo
+            # dọn rác để sẵn sàng cho chunk tiếp theo
             current_chunk.clear()
+            current_chunk_meta.clear()
 
 if __name__ == "__main__":
     main()

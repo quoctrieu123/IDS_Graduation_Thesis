@@ -10,11 +10,20 @@ class EnsembleManager:
         self.device = torch.device(device)
         
         # 1. Khởi tạo 2 mô hình PyTorch
-        self.gnn = GAT_Embedder(in_channels=137, num_classes=8).to(self.device)
-        self.seq = CNN_BiLSTM_Attention(num_features=137, num_classes=8).to(self.device)
+        # Sửa các tham số in_channels, out_channels và num_heads
+        self.gnn = GAT_Embedder(
+            in_channels=133, 
+            hidden_channels=64,      
+            embedding_dim=32,        
+            num_classes=8, 
+            heads=8,
+            edge_dropout=0.3,
+            edge_dim=5 
+        ).to(device)
+        self.seq = CNN_BiLSTM_Attention(num_features=133, num_classes=8).to(self.device)
         
-        self.gnn.load_state_dict(torch.load('artifacts/gnn_weights.pth', map_location=self.device))
-        self.seq.load_state_dict(torch.load('artifacts/seq_weights.pth', map_location=self.device))
+        self.gnn.load_state_dict(torch.load(r'C:\Users\Admin\Downloads\IoT Dataset\CCIOT\model_final\gat_embedder_best.pth', map_location=self.device))
+        self.seq.load_state_dict(torch.load(r'C:\Users\Admin\Downloads\IoT Dataset\CCIOT\model_final\best_cnn_bilstm_best.pth', map_location=self.device))
         
         # Khóa mô hình ở chế độ suy luận (Tắt Dropout, khóa BatchNorm)
         self.gnn.eval()
@@ -22,16 +31,17 @@ class EnsembleManager:
         
         # 2. Khởi tạo 2 mô hình XGBoost
         self.xgb_bottom = xgb.Booster()
-        self.xgb_bottom.load_model('artifacts/xgb_bottom.json')
+        self.xgb_bottom.load_model(r'C:\Users\Admin\Downloads\IoT Dataset\CCIOT\model_final\GAT_XGB_Hybrid_Temporal_Model_best.json')
         
         self.xgb_meta = xgb.Booster()
-        self.xgb_meta.load_model('artifacts/xgb_meta.json')
+        self.xgb_meta.load_model(r'C:\Users\Admin\Downloads\IoT Dataset\CCIOT\model_final\meta_learner_xgb_final.json')
 
+    # nhận vào dữ liệu được xây dựng từ BufferManager và trả về nhãn dự đoán cuối cùng sau khi chạy qua toàn bộ pipeline
     def predict(self, window_x, graph_x, edge_index, edge_attr=None, target_indices=None):
         """
         Thực hiện chạy toàn bộ pipeline
-        - window_x: Tensor (Batch, 10, 137)
-        - graph_x: Tensor (N_nodes, 137)
+        - window_x: Tensor (Batch, 10, 133)
+        - graph_x: Tensor (N_nodes, 133)
         - edge_index: Tensor (2, E)
         - target_indices: Danh sách vị trí của Batch (256 nodes) mục tiêu trong đồ thị N_nodes
         """
@@ -45,7 +55,12 @@ class EnsembleManager:
             # ==========================================
             # NHÁNH DƯỚI: GRAPH + XGBoost 1
             # ==========================================
-            _, graph_embedding = self.gnn(graph_x.to(self.device), edge_index.to(self.device), edge_attr)
+            edge_attr_device = edge_attr.to(self.device) if edge_attr is not None else None
+            _, graph_embedding = self.gnn(
+                graph_x.to(self.device),
+                edge_index.to(self.device),
+                edge_attr_device,
+            )
             
             # Khâu Target Flow Alignment: Chỉ lấy embedding của các nodes mục tiêu
             target_embeddings = graph_embedding[target_indices] # Shape: (B, 128)

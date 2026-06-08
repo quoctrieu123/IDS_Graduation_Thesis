@@ -1,10 +1,11 @@
+# đọc file parquet, lấy từng dòng dữ liệu, chuyển timestmap_start sang float (giây), và đẩy vào Kafka topic theo đúng thứ tự thời gian
 import time
 import json
 import pandas as pd
 from kafka import KafkaProducer
 
 # --- CẤU HÌNH ---
-SPEED_FACTOR = 1.0  # Chỉnh > 1.0 để tua nhanh thời gian (vd: 10.0 là nhanh gấp 10 lần)
+SPEED_FACTOR = 10000.0  # Chỉnh > 1.0 để tua nhanh thời gian (vd: 10.0 là nhanh gấp 10 lần)
 KAFKA_TOPIC = 'raw_flows'
 KAFKA_SERVER = 'localhost:9092'
 DATA_PATH = r'C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\data_1s.parquet' 
