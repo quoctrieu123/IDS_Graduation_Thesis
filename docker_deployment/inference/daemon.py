@@ -31,6 +31,24 @@ INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "nids-super-secret-token-12345")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 logger = logging.getLogger(__name__)
 
+def add_flow_feature_fields(point: Point, flow: ProcessedFlow) -> Point:
+    feature_fields = flow.model_dump(
+        by_alias=True,
+        exclude={
+            "timestamp",
+            "label",
+            "network_ips_src",
+            "network_ips_dst",
+        },
+    )
+
+    for field_name, value in feature_fields.items():
+        if value is None:
+            continue
+        point = point.field(field_name, value)
+
+    return point
+
 def main():
     # 1. KHỞI TẠO THIẾT BỊ (Tận dụng sức mạnh RTX 4070 Super)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -113,6 +131,7 @@ def main():
                         .field("kafka_partition", int(meta["partition"])) \
                         .field("kafka_offset", int(meta["offset"])) \
                         .time(int(flow.timestamp * 1e9), WritePrecision.NS) # Ghi chuẩn xác tới nano-giây
+                    point = add_flow_feature_fields(point, flow)
                     points.append(point)
                 
                 # ghi batch vào influxdb
