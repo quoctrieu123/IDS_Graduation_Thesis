@@ -1,8 +1,10 @@
 import os
 import json
 import logging
+import time
 import torch
 from kafka import KafkaConsumer
+from kafka.errors import NoBrokersAvailable
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from pydantic import ValidationError
@@ -16,9 +18,18 @@ from models.ensemble import EnsembleManager
 # CẤU HÌNH HỆ THỐNG
 # ==========================================
 # Cấu hình luồng
-CHUNK_SIZE = 256
-KAFKA_TOPIC = "processed_flows"
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "256"))
+SEQ_TIME_STEPS = int(os.getenv("SEQ_TIME_STEPS", "10"))
+GRAPH_WINDOW_SIZE = int(os.getenv("GRAPH_WINDOW_SIZE", "50"))
+GRAPH_MAX_DT = float(os.getenv("GRAPH_MAX_DT", "30.0"))
+KAFKA_TOPIC = os.getenv("PROCESSED_TOPIC", "processed_flows")
 KAFKA_SERVER = os.getenv("KAFKA_SERVER", "localhost:9092")
+INFERENCE_GROUP_ID = os.getenv("INFERENCE_GROUP_ID", "inference_group_replay_3")
+KAFKA_AUTO_OFFSET_RESET = os.getenv("KAFKA_AUTO_OFFSET_RESET", "earliest")
+KAFKA_ENABLE_AUTO_COMMIT = os.getenv("KAFKA_ENABLE_AUTO_COMMIT", "true").lower() == "true"
+KAFKA_CONNECT_RETRIES = int(os.getenv("KAFKA_CONNECT_RETRIES", "30"))
+KAFKA_RETRY_BACKOFF_SECONDS = float(os.getenv("KAFKA_RETRY_BACKOFF_SECONDS", "2.0"))
+INFERENCE_DEVICE = os.getenv("INFERENCE_DEVICE", "auto")
 
 # Cấu hình InfluxDB
 INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://localhost:8086")
@@ -31,32 +42,48 @@ INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "nids-super-secret-token-12345")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 logger = logging.getLogger(__name__)
 
-def add_flow_feature_fields(point: Point, flow: ProcessedFlow) -> Point:
-    feature_fields = flow.model_dump(
-        by_alias=True,
-        exclude={
-            "timestamp",
-            "label",
-            "network_ips_src",
-            "network_ips_dst",
-        },
-    )
+def create_kafka_consumer() -> KafkaConsumer:
+    for attempt in range(1, KAFKA_CONNECT_RETRIES + 1):
+        try:
+            logger.info(
+                "Dang ket noi toi Kafka Broker tai %s... attempt=%s/%s",
+                KAFKA_SERVER,
+                attempt,
+                KAFKA_CONNECT_RETRIES,
+            )
+            return KafkaConsumer(
+                KAFKA_TOPIC,
+                bootstrap_servers=[KAFKA_SERVER],
+                group_id=INFERENCE_GROUP_ID,
+                value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+                auto_offset_reset=KAFKA_AUTO_OFFSET_RESET,
+                enable_auto_commit=KAFKA_ENABLE_AUTO_COMMIT,
+            )
+        except NoBrokersAvailable:
+            if attempt == KAFKA_CONNECT_RETRIES:
+                raise
+            logger.warning(
+                "Kafka chua san sang, thu lai sau %.1f giay...",
+                KAFKA_RETRY_BACKOFF_SECONDS,
+            )
+            time.sleep(KAFKA_RETRY_BACKOFF_SECONDS)
 
-    for field_name, value in feature_fields.items():
-        if value is None:
-            continue
-        point = point.field(field_name, value)
-
-    return point
+    raise NoBrokersAvailable()
 
 def main():
     # 1. KHỞI TẠO THIẾT BỊ (Tận dụng sức mạnh RTX 4070 Super)
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = "cuda" if INFERENCE_DEVICE == "auto" and torch.cuda.is_available() else INFERENCE_DEVICE
+    if device == "auto":
+        device = "cpu"
     logger.info(f"🚀 Khởi động NIDS Daemon. Môi trường tính toán: {device.upper()}")
 
     # 2. KHỞI TẠO CÁC MODULE AI
     logger.info("Đang nạp trọng số mô hình vào VRAM...")
-    buffer_manager = BufferManager(seq_time_steps=10, graph_window_size=50, max_dt=30.0)
+    buffer_manager = BufferManager(
+        seq_time_steps=SEQ_TIME_STEPS,
+        graph_window_size=GRAPH_WINDOW_SIZE,
+        max_dt=GRAPH_MAX_DT,
+    )
     # khơi tạo các mô hình
     try:
         ensemble_manager = EnsembleManager(device=device)
@@ -69,15 +96,7 @@ def main():
     write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
     # 4. KHỞI TẠO KAFKA CONSUMER
-    logger.info(f"Đang kết nối tới Kafka Broker tại {KAFKA_SERVER}...")
-    consumer = KafkaConsumer(
-        KAFKA_TOPIC,
-        bootstrap_servers=[KAFKA_SERVER],
-        group_id='inference_group_replay_3',
-        value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-        auto_offset_reset='earliest', # Đọc luồng mới nhất để tránh độ trễ tích lũy
-        enable_auto_commit=True,
-    )
+    consumer = create_kafka_consumer()
     
     # Bộ đệm tạm thời để gom đủ CHUNK_SIZE
     current_chunk = []
@@ -131,7 +150,6 @@ def main():
                         .field("kafka_partition", int(meta["partition"])) \
                         .field("kafka_offset", int(meta["offset"])) \
                         .time(int(flow.timestamp * 1e9), WritePrecision.NS) # Ghi chuẩn xác tới nano-giây
-                    point = add_flow_feature_fields(point, flow)
                     points.append(point)
                 
                 # ghi batch vào influxdb

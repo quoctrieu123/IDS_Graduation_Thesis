@@ -1,23 +1,13 @@
-# file khởi tạo 4 container chính cho NIDS:
-# Zookeeper: quản lý Kafka Cluster
-#InfluxDB: Lưu kết quả dự đoán
-# Kafka: Nhận stream data từ Data Generator
-# grafana: giám sát kết quả dự đoán qua dashboard
-
-version: '3.8'
-
-# Định nghĩa mạng nội bộ cho các container giao tiếp với nhau
 networks:
   nids_net:
     driver: bridge
 
-# Định nghĩa không gian lưu trữ bền vững
 volumes:
   influxdb_data:
   grafana_data:
+  spark_checkpoints:
 
 services:
-  # 1. Zookeeper (Bắt buộc để quản lý Kafka)
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
     container_name: zookeeper
@@ -27,26 +17,29 @@ services:
     networks:
       - nids_net
 
-  # 2. Message Broker (Nhận stream data)
   kafka:
     image: confluentinc/cp-kafka:7.4.0
     container_name: kafka
     depends_on:
       - zookeeper
     ports:
-      - "9092:9092" # Expose cổng 9092 ra máy host để Data Generator đẩy dữ liệu vào
+      - "${KAFKA_HOST_PORT:-9092}:9092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      # Cấu hình listener để host (localhost) và các container khác đều kết nối được
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:${KAFKA_HOST_PORT:-9092}
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     networks:
       - nids_net
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
 
-  # 3. Time-series Database (Lưu kết quả dự đoán)
   influxdb:
     image: influxdb:2.7
     container_name: influxdb
@@ -55,28 +48,105 @@ services:
     volumes:
       - influxdb_data:/var/lib/influxdb2
     environment:
-      # Tự động khởi tạo user và database (bucket)
-      - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=adminpassword
-      - DOCKER_INFLUXDB_INIT_ORG=nids_org
-      - DOCKER_INFLUXDB_INIT_BUCKET=nids_bucket
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=nids-super-secret-token-12345
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_USERNAME:-admin}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:-adminpassword}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG:-nids_org}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET:-nids_bucket}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN:-nids-super-secret-token-12345}
     networks:
       - nids_net
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
-  # 4. Monitoring Dashboard
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
     ports:
       - "3000:3000"
     depends_on:
-      - influxdb
+      influxdb:
+        condition: service_healthy
     volumes:
       - grafana_data:/var/lib/grafana
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
     networks:
       - nids_net
+
+  inference-daemon:
+    build:
+      context: .
+      dockerfile: inference.Dockerfile
+    image: nids-inference-daemon:dev
+    container_name: inference-daemon
+    depends_on:
+      kafka:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    volumes:
+      - ../CCIOT/model_final:/app/artifacts/model_final:ro
+    environment:
+      KAFKA_SERVER: ${KAFKA_INTERNAL_SERVER:-kafka:29092}
+      PROCESSED_TOPIC: ${PROCESSED_TOPIC:-processed_flows}
+      INFERENCE_GROUP_ID: ${INFERENCE_GROUP_ID:-inference_group_docker}
+      KAFKA_AUTO_OFFSET_RESET: ${KAFKA_AUTO_OFFSET_RESET:-earliest}
+      KAFKA_ENABLE_AUTO_COMMIT: ${KAFKA_ENABLE_AUTO_COMMIT:-true}
+      KAFKA_CONNECT_RETRIES: ${KAFKA_CONNECT_RETRIES:-30}
+      KAFKA_RETRY_BACKOFF_SECONDS: ${KAFKA_RETRY_BACKOFF_SECONDS:-2.0}
+      INFLUXDB_URL: ${INFLUXDB_URL:-http://influxdb:8086}
+      INFLUXDB_ORG: ${INFLUXDB_ORG:-nids_org}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-nids_bucket}
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-nids-super-secret-token-12345}
+      MODEL_DIR: /app/artifacts/model_final
+      INFERENCE_DEVICE: ${INFERENCE_DEVICE:-auto}
+      CHUNK_SIZE: ${CHUNK_SIZE:-256}
+      SEQ_TIME_STEPS: ${SEQ_TIME_STEPS:-10}
+      GRAPH_WINDOW_SIZE: ${GRAPH_WINDOW_SIZE:-50}
+      GRAPH_MAX_DT: ${GRAPH_MAX_DT:-30.0}
+    networks:
+      - nids_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python -u daemon.py' >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  spark-streaming:
+    build:
+      context: .
+      dockerfile: spark.Dockerfile
+    image: nids-spark-streaming:dev
+    container_name: spark-streaming
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ../CCIOT/saved_preprocessed:/app/artifacts/saved_preprocessed:ro
+      - spark_checkpoints:/app/checkpoints
+    environment:
+      KAFKA_SERVER: ${KAFKA_INTERNAL_SERVER:-kafka:29092}
+      RAW_TOPIC: ${RAW_TOPIC:-raw_flows}
+      PROCESSED_TOPIC: ${PROCESSED_TOPIC:-processed_flows}
+      SPARK_STARTING_OFFSETS: ${SPARK_STARTING_OFFSETS:-earliest}
+      SPARK_CHECKPOINT: ${SPARK_CHECKPOINT:-file:///app/checkpoints/spark_checkpoints_cciot}
+      SAVED_PREPROCESSED_DIR: /app/artifacts/saved_preprocessed
+      SPARK_WORKER_LOG: ${SPARK_WORKER_LOG:-/tmp/spark_worker_debug.log}
+      SPARK_KAFKA_PACKAGE: ${SPARK_KAFKA_PACKAGE:-org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1}
+    networks:
+      - nids_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python -u spark_streaming.py' >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s

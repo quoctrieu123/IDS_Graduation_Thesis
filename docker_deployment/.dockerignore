@@ -1,0 +1,51 @@
+# Docker and local secrets
+.env
+.env.*
+!.env.example
+
+# Python caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Spark runtime state
+spark_checkpoints_cciot/
+checkpoints/
+*.checkpoint/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Notebooks and analysis artifacts
+*.ipynb
+.ipynb_checkpoints/
+
+# Large data/model artifacts should be mounted, not copied into images
+*.csv
+*.parquet
+*.pkl
+*.joblib
+*.pth
+*.pt
+*.onnx
+*.jsonl
+
+# Git and editor metadata
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# OS metadata
+Thumbs.db
+.DS_Store

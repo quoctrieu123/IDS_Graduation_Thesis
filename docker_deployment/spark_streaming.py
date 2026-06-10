@@ -17,14 +17,26 @@ from pyspark.sql.types import (
     StructType, StructField, StringType, FloatType, 
     IntegerType, DoubleType, LongType, BooleanType
 )
-os.environ["HADOOP_HOME"] = r'C:\hadoop-3.0.0'
-os.environ["PATH"] = os.environ["HADOOP_HOME"] + r'\bin;' + os.environ["PATH"]
+DEFAULT_SAVED_PREPROCESSED_DIR = r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed"
+KAFKA_SERVER = os.getenv("KAFKA_SERVER", "localhost:9092")
+RAW_TOPIC = os.getenv("RAW_TOPIC", "raw_flows")
+PROCESSED_TOPIC = os.getenv("PROCESSED_TOPIC", "processed_flows")
+STARTING_OFFSETS = os.getenv("SPARK_STARTING_OFFSETS", "earliest")
+SPARK_CHECKPOINT = os.getenv("SPARK_CHECKPOINT", "file:///C:/spark_checkpoints_cciot")
+SAVED_PREPROCESSED_DIR = os.getenv("SAVED_PREPROCESSED_DIR", DEFAULT_SAVED_PREPROCESSED_DIR)
+SPARK_WORKER_LOG = os.getenv("SPARK_WORKER_LOG", r"C:\Users\Admin\Downloads\spark_worker_debug.log")
+
+if os.name == "nt":
+    hadoop_home = os.getenv("HADOOP_HOME", r"C:\hadoop-3.0.0")
+    if hadoop_home:
+        os.environ["HADOOP_HOME"] = hadoop_home
+        os.environ["PATH"] = os.environ["HADOOP_HOME"] + r"\bin;" + os.environ["PATH"]
 # Cấu hình cứng để luôn gọi đúng thư viện của bản 3.5.1
 os.environ["PYSPARK_PYTHON"] = sys.executable
 os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 os.environ["ARROW_DEFAULT_MEMORY_POOL"] = "system"
 
-kafka_package = "org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1"
+kafka_package = os.getenv("SPARK_KAFKA_PACKAGE", "org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1")
 
 spark = SparkSession.builder \
     .appName("CCIOT_Streaming_Preprocessor") \
@@ -65,23 +77,26 @@ def map_to_frequent(proto_list,freq_set):
 
 def log_to_worker_file(msg):
     # Chọn một đường dẫn an toàn trên máy bạn để lưu log
-    log_path = r"C:\Users\Admin\Downloads\spark_worker_debug.log"
+    log_path = SPARK_WORKER_LOG
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"[{datetime.datetime.now()}] {msg}\n")
+
+def artifact_path(filename):
+    return os.path.join(SAVED_PREPROCESSED_DIR, filename)
 
 def preprocess_micro_batch(iterator):
     log_to_worker_file("Khởi động Worker mới...")
     # Khởi tạo artifacts một lần trên mỗi Worker để tối ưu RAM
     try:
-        scaler = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\quantile_scaler.pkl")
-        cols_to_drop = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\cols_to_drop.pkl")
-        numeric_cols = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\numeric_columns.pkl")
+        scaler = joblib.load(artifact_path("quantile_scaler.pkl"))
+        cols_to_drop = joblib.load(artifact_path("cols_to_drop.pkl"))
+        numeric_cols = joblib.load(artifact_path("numeric_columns.pkl"))
         # Load các MultiLabelBinarizer đã fit từ lúc train
-        mlb_log = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\mlb_log_data_types.pkl")
-        mlb_src = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\mlb_network_protocols_src.pkl")
-        mlb_dst = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\mlb_network_protocols_dst.pkl")
-        freq_src_protos = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\freq_network_protocols_src.pkl")
-        freq_dst_protos = joblib.load(r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed\freq_network_protocols_dst.pkl")
+        mlb_log = joblib.load(artifact_path("mlb_log_data_types.pkl"))
+        mlb_src = joblib.load(artifact_path("mlb_network_protocols_src.pkl"))
+        mlb_dst = joblib.load(artifact_path("mlb_network_protocols_dst.pkl"))
+        freq_src_protos = joblib.load(artifact_path("freq_network_protocols_src.pkl"))
+        freq_dst_protos = joblib.load(artifact_path("freq_network_protocols_dst.pkl"))
     except Exception as e:
         log_to_worker_file(f"Lỗi khi loat model: {traceback.format_exc()}")
         raise e
@@ -181,9 +196,9 @@ def preprocess_micro_batch(iterator):
 # Đọc luồng từ Kafka
 df_kafka = spark.readStream \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "localhost:9092") \
-    .option("subscribe", "raw_flows") \
-    .option("startingOffsets", "earliest") \
+    .option("kafka.bootstrap.servers", KAFKA_SERVER) \
+    .option("subscribe", RAW_TOPIC) \
+    .option("startingOffsets", STARTING_OFFSETS) \
     .load()
 
 # Parse JSON
@@ -197,9 +212,9 @@ query = df_processed \
     .selectExpr("to_json(struct(*)) AS value") \
     .writeStream \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "localhost:9092") \
-    .option("topic", "processed_flows") \
-    .option("checkpointLocation", "file:///C:/spark_checkpoints_cciot") \
+    .option("kafka.bootstrap.servers", KAFKA_SERVER) \
+    .option("topic", PROCESSED_TOPIC) \
+    .option("checkpointLocation", SPARK_CHECKPOINT) \
     .start()
 
 query.awaitTermination()

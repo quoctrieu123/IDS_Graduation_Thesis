@@ -1,9 +1,16 @@
+import os
 import torch
 import xgboost as xgb
 import numpy as np
 
 from .gat_model import GAT_Embedder
 from .seq_model import CNN_BiLSTM_Attention
+
+DEFAULT_MODEL_DIR = r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\model_final"
+MODEL_DIR = os.getenv("MODEL_DIR", DEFAULT_MODEL_DIR)
+
+def model_path(filename):
+    return os.path.join(MODEL_DIR, filename)
 
 class EnsembleManager:
     def __init__(self, device='cpu'):
@@ -22,8 +29,8 @@ class EnsembleManager:
         ).to(device)
         self.seq = CNN_BiLSTM_Attention(num_features=133, num_classes=8).to(self.device)
         
-        self.gnn.load_state_dict(torch.load(r'C:\Users\Admin\Downloads\IoT Dataset\CCIOT\model_final\gat_embedder_best.pth', map_location=self.device))
-        self.seq.load_state_dict(torch.load(r'C:\Users\Admin\Downloads\IoT Dataset\CCIOT\model_final\best_cnn_bilstm_best.pth', map_location=self.device))
+        self.gnn.load_state_dict(torch.load(model_path("gat_embedder_best.pth"), map_location=self.device))
+        self.seq.load_state_dict(torch.load(model_path("best_cnn_bilstm_best.pth"), map_location=self.device))
         
         # Khóa mô hình ở chế độ suy luận (Tắt Dropout, khóa BatchNorm)
         self.gnn.eval()
@@ -31,10 +38,10 @@ class EnsembleManager:
         
         # 2. Khởi tạo 2 mô hình XGBoost
         self.xgb_bottom = xgb.Booster()
-        self.xgb_bottom.load_model(r'C:\Users\Admin\Downloads\IoT Dataset\CCIOT\model_final\GAT_XGB_Hybrid_Temporal_Model_best.json')
+        self.xgb_bottom.load_model(model_path("GAT_XGB_Hybrid_Temporal_Model_best.json"))
         
         self.xgb_meta = xgb.Booster()
-        self.xgb_meta.load_model(r'C:\Users\Admin\Downloads\IoT Dataset\CCIOT\model_final\meta_learner_xgb_final.json')
+        self.xgb_meta.load_model(model_path("meta_learner_xgb_final_hybrid.json"))
 
     # nhận vào dữ liệu được xây dựng từ BufferManager và trả về nhãn dự đoán cuối cùng sau khi chạy qua toàn bộ pipeline
     def predict(self, window_x, graph_x, edge_index, edge_attr=None, target_indices=None):
@@ -50,7 +57,7 @@ class EnsembleManager:
             # NHÁNH TRÊN: SEQUENCE
             # ==========================================
             seq_out = self.seq(window_x.to(self.device)) # Shape: (B, 8)
-            seq_out_np = seq_out.cpu().numpy()
+            seq_prob_np = torch.softmax(seq_out, dim=1).cpu().numpy()
             
             # ==========================================
             # NHÁNH DƯỚI: GRAPH + XGBoost 1
@@ -73,8 +80,8 @@ class EnsembleManager:
             # ==========================================
             # META LEARNER: Ghép nối (Concat)
             # ==========================================
-            # Nối kết quả của nhánh trên và nhánh dưới (B, 8+8 = 16)
-            meta_features = np.concatenate((seq_out_np, xgb_bottom_out), axis=1)
+            # Meta learner was trained with XGB probabilities first, then CNN-BiLSTM probabilities.
+            meta_features = np.concatenate((xgb_bottom_out, seq_prob_np), axis=1)
             
             dmatrix_meta = xgb.DMatrix(meta_features)
             final_predictions = self.xgb_meta.predict(dmatrix_meta)
