@@ -1,31 +1,117 @@
-IP-files/
-Z-wave-files/
-ip-files-fillna-lstm/
-ip-files-test/
-ip-files-train-base/
-ip-files-train-meta/
-*.csv
-ip-files-valid-base/
-learning_dataset/
-merged-scaled-data/
-final_data/chunk-based-split/
-final_data/test_df_prepared.parquet
-final_data/train_df_prepared.parquet
-final_data/valid_df_prepared.parquet
-final_data/chunk-based-split-3/
-catboost_info/
-final_data_tcp_based/
-final_data_http/
-data_meta_learner/
-ip-files-fillna-http/
-ip-files-fillna-tcp/
-oof/cnn_bilstm_oof/
-oof/gat_xg_boost_oof/
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
 venv/
-tcp_based_training_model/saved_models_xids/
-CCIOT/test.csv
-CCIOT/train.csv
-CCIOT/valid.csv*.pkl
-tcp_based_training_model/SOTA/saved_models_xids/
-CCIOT/saved_preprocessed/
-CCIOT/model_final/
+env/
+ENV/
+
+# Python packaging and build artifacts
+build/
+dist/
+downloads/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Test, type-checking, and lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# -----------------------------------------------------------------------------
+# Jupyter
+# -----------------------------------------------------------------------------
+.ipynb_checkpoints/
+
+# -----------------------------------------------------------------------------
+# Local configuration and secrets
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# -----------------------------------------------------------------------------
+# Editors and operating systems
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# -----------------------------------------------------------------------------
+# Logs and temporary files
+# -----------------------------------------------------------------------------
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+spark_worker_debug.log
+
+# -----------------------------------------------------------------------------
+# Large raw and preprocessed datasets
+#
+# Small preprocessing artifacts such as *.pkl and *.joblib are intentionally
+# retained because they are required to reproduce preprocessing and inference.
+# -----------------------------------------------------------------------------
+*.csv
+*.parquet
+*.feather
+*.arrow
+*.npy
+*.npz
+*.h5
+*.hdf5
+
+# -----------------------------------------------------------------------------
+# Experiment outputs and framework caches
+#
+# Trained models under each use case's model_saved/ directory are intentionally
+# retained. Use Git LFS for model binaries if the repository is hosted remotely.
+# -----------------------------------------------------------------------------
+catboost_info/
+wandb/
+runs/
+lightning_logs/
+mlruns/
+saved_models_xids/
+
+# -----------------------------------------------------------------------------
+# Spark, Kafka, and local deployment state
+# -----------------------------------------------------------------------------
+spark_checkpoints*/
+docker_deployment/spark_checkpoints_cciot/
+spark-warehouse/
+metastore_db/
+derby.log
+*.crc
+
+# Local service data if bind-mounted during development
+docker_deployment/influxdb_data/
+docker_deployment/grafana_data/
+docker_deployment/kafka_data/
+docker_deployment/zookeeper_data/
+
+# -----------------------------------------------------------------------------
+# Generated reports and profiling output
+# -----------------------------------------------------------------------------
+.cache/
+profile-results/
+*.prof
