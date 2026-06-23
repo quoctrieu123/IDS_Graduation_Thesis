@@ -160,7 +160,7 @@ def process_chunk_based_split():
         test_df["label"] = safe_transform_labels(test_df["label"])
 
     # 9. Lưu vào folder chunk-based-split theo định dạng .parquet
-    save_folder = os.path.join("final_data", "chunk-based-split-3")
+    save_folder = os.path.join(os.path.dirname(__file__), "chunk-based-split-1-exper2")
     os.makedirs(save_folder, exist_ok=True)
     
     print("--- Đang lưu DataFrames sang định dạng Parquet... ---")
