@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import torch
 import xgboost as xgb
 import numpy as np
@@ -6,8 +7,9 @@ import numpy as np
 from .gat_model import GAT_Embedder
 from .seq_model import CNN_BiLSTM_Attention
 
-DEFAULT_MODEL_DIR = r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\model_final"
-MODEL_DIR = os.getenv("MODEL_DIR", DEFAULT_MODEL_DIR)
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_MODEL_DIR = PROJECT_ROOT / "Use case 3_CIC_IIOT_2025" / "model_saved"
+MODEL_DIR = os.getenv("MODEL_DIR", str(DEFAULT_MODEL_DIR))
 
 def model_path(filename):
     return os.path.join(MODEL_DIR, filename)
@@ -29,8 +31,8 @@ class EnsembleManager:
         ).to(device)
         self.seq = CNN_BiLSTM_Attention(num_features=133, num_classes=8).to(self.device)
         
-        self.gnn.load_state_dict(torch.load(model_path("gat_embedder_best.pth"), map_location=self.device))
-        self.seq.load_state_dict(torch.load(model_path("best_cnn_bilstm_best.pth"), map_location=self.device))
+        self.gnn.load_state_dict(torch.load(model_path("gat_embedder_exper_1_best.pth"), map_location=self.device))
+        self.seq.load_state_dict(torch.load(model_path("cnn_bilstm_exper_1_best.pth"), map_location=self.device))
         
         # Khóa mô hình ở chế độ suy luận (Tắt Dropout, khóa BatchNorm)
         self.gnn.eval()
@@ -38,10 +40,10 @@ class EnsembleManager:
         
         # 2. Khởi tạo 2 mô hình XGBoost
         self.xgb_bottom = xgb.Booster()
-        self.xgb_bottom.load_model(model_path("GAT_XGB_Hybrid_Temporal_Model_best.json"))
+        self.xgb_bottom.load_model(model_path("GAT_XGB_Hybrid_Temporal_Model_exper_1_best.json"))
         
         self.xgb_meta = xgb.Booster()
-        self.xgb_meta.load_model(model_path("meta_learner_xgb_final_hybrid.json"))
+        self.xgb_meta.load_model(model_path("meta_learner_xgb_hybrid.json"))
 
     # nhận vào dữ liệu được xây dựng từ BufferManager và trả về nhãn dự đoán cuối cùng sau khi chạy qua toàn bộ pipeline
     def predict(self, window_x, graph_x, edge_index, edge_attr=None, target_indices=None):

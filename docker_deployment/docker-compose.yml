@@ -107,7 +107,7 @@ services:
       influxdb:
         condition: service_healthy
     volumes:
-      - ../CCIOT/model_final:/app/artifacts/model_final:ro
+      - ../Use case 3_CIC_IIOT_2025/model_saved:/app/artifacts/model_final:ro
     environment:
       KAFKA_SERVER: ${KAFKA_INTERNAL_SERVER:-kafka:29092}
       PROCESSED_TOPIC: ${PROCESSED_TOPIC:-processed_flows}
@@ -146,7 +146,7 @@ services:
       kafka:
         condition: service_healthy
     volumes:
-      - ../CCIOT/saved_preprocessed:/app/artifacts/saved_preprocessed:ro
+      - ../Use case 3_CIC_IIOT_2025/saved_preprocessed:/app/artifacts/saved_preprocessed:ro
       - spark_checkpoints:/app/checkpoints
     environment:
       KAFKA_SERVER: ${KAFKA_INTERNAL_SERVER:-kafka:29092}

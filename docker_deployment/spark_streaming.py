@@ -13,18 +13,26 @@ import os
 import sys
 import traceback
 import datetime
+from pathlib import Path
 from pyspark.sql.types import (
-    StructType, StructField, StringType, FloatType, 
+    StructType, StructField, StringType, FloatType,
     IntegerType, DoubleType, LongType, BooleanType
 )
-DEFAULT_SAVED_PREPROCESSED_DIR = r"C:\Users\Admin\Downloads\IoT Dataset\CCIOT\saved_preprocessed"
+
+DEPLOYMENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = DEPLOYMENT_DIR.parent
+
+DEFAULT_SAVED_PREPROCESSED_DIR = PROJECT_ROOT / "Use case 3_CIC_IIOT_2025" / "saved_preprocessed"
+DEFAULT_SPARK_CHECKPOINT = (DEPLOYMENT_DIR / "spark_checkpoints_cciot").resolve().as_uri()
+DEFAULT_SPARK_WORKER_LOG = DEPLOYMENT_DIR / "spark_worker_debug.log"
+
 KAFKA_SERVER = os.getenv("KAFKA_SERVER", "localhost:9092")
 RAW_TOPIC = os.getenv("RAW_TOPIC", "raw_flows")
 PROCESSED_TOPIC = os.getenv("PROCESSED_TOPIC", "processed_flows")
 STARTING_OFFSETS = os.getenv("SPARK_STARTING_OFFSETS", "earliest")
-SPARK_CHECKPOINT = os.getenv("SPARK_CHECKPOINT", "file:///C:/spark_checkpoints_cciot")
-SAVED_PREPROCESSED_DIR = os.getenv("SAVED_PREPROCESSED_DIR", DEFAULT_SAVED_PREPROCESSED_DIR)
-SPARK_WORKER_LOG = os.getenv("SPARK_WORKER_LOG", r"C:\Users\Admin\Downloads\spark_worker_debug.log")
+SPARK_CHECKPOINT = os.getenv("SPARK_CHECKPOINT", DEFAULT_SPARK_CHECKPOINT)
+SAVED_PREPROCESSED_DIR = os.getenv("SAVED_PREPROCESSED_DIR", str(DEFAULT_SAVED_PREPROCESSED_DIR))
+SPARK_WORKER_LOG = os.getenv("SPARK_WORKER_LOG", str(DEFAULT_SPARK_WORKER_LOG))
 
 if os.name == "nt":
     hadoop_home = os.getenv("HADOOP_HOME", r"C:\hadoop-3.0.0")
@@ -65,7 +73,7 @@ def parse_string_to_list(val):
         return val if isinstance(val, list) else []
     except (ValueError, SyntaxError):
         return []
-    
+
 def map_to_frequent(proto_list,freq_set):
     res = set()
     for p in proto_list:
@@ -78,6 +86,7 @@ def map_to_frequent(proto_list,freq_set):
 def log_to_worker_file(msg):
     # Chọn một đường dẫn an toàn trên máy bạn để lưu log
     log_path = SPARK_WORKER_LOG
+    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"[{datetime.datetime.now()}] {msg}\n")
 
@@ -101,7 +110,7 @@ def preprocess_micro_batch(iterator):
         log_to_worker_file(f"Lỗi khi loat model: {traceback.format_exc()}")
         raise e
     expected_cols = output_schema.fieldNames()
-    
+
     for pdf in iterator:
         if pdf.empty:
             yield pdf
@@ -111,7 +120,7 @@ def preprocess_micro_batch(iterator):
             current_drop = [c for c in cols_to_drop if c in pdf.columns]
             pdf.drop(columns=current_drop, inplace=True, errors='ignore')
 
-                
+
             # B. Parse list và áp dụng One-hot encoding (MultiLabelBinarizer)
             if 'log_data-types' in pdf.columns:
                 parsed = pdf['log_data-types'].apply(parse_string_to_list)
@@ -144,7 +153,7 @@ def preprocess_micro_batch(iterator):
             current_numeric_cols = numeric_cols.copy()
             if 'label' in current_numeric_cols: current_numeric_cols.remove('label')
             if 'timestamp' in current_numeric_cols: current_numeric_cols.remove('timestamp')
-            
+
             valid_numeric_cols = [c for c in current_numeric_cols if c in pdf.columns]
             log_to_worker_file(f"-> Chuẩn bị scale {len(valid_numeric_cols)} cột numeric.")
             if valid_numeric_cols:
@@ -153,28 +162,28 @@ def preprocess_micro_batch(iterator):
             pdf = pdf.reindex(columns=expected_cols, fill_value=0)
             for field in output_schema.fields:
                 col_name = field.name
-                
+
                 # Bắt buộc ép về đúng type của Spark Arrow
                 if isinstance(field.dataType, IntegerType):
                     pdf[col_name] = pdf[col_name].fillna(0).astype('int32')
-                    
+
                 elif isinstance(field.dataType, LongType):
                     pdf[col_name] = pdf[col_name].fillna(0).astype('int64')
-                    
+
                 elif isinstance(field.dataType, FloatType):
                     pdf[col_name] = pdf[col_name].fillna(0.0).astype('float32')
-                    
+
                 elif isinstance(field.dataType, DoubleType):
                     pdf[col_name] = pdf[col_name].fillna(0.0).astype('float64')
-                    
+
                 elif isinstance(field.dataType, BooleanType):
                     pdf[col_name] = pdf[col_name].fillna(False).astype(bool)
-                    
+
                 elif isinstance(field.dataType, StringType):
                     pdf[col_name] = pdf[col_name].fillna("").astype(str)
                 else:
                     log_to_worker_file(f"CẢNH BÁO NGHIÊM TRỌNG: Cột '{col_name}' có kiểu {field.dataType} chưa được ép kiểu!")
-            pdf.reset_index(drop=True, inplace=True) 
+            pdf.reset_index(drop=True, inplace=True)
             log_to_worker_file(f"-> Hoàn tất batch. Chuẩn bị yield {len(pdf.columns)} cột.")
             #expected_cols = output_schema.fieldNames()
             #pdf = pdf[expected_cols].fillna(0)
