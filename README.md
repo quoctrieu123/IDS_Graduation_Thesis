@@ -8,7 +8,7 @@ The proposed approach combines two complementary views of network traffic:
 - **Temporal:** transforms chronologically ordered traffic into sliding windows and classifies them using a Residual CNN–BiLSTM–Attention model.
 - **Ensemble:** uses a meta-learner to combine the probability distributions produced by the two branches and generate the final prediction.
 
-![Overall architecture](Images/Full%20Architecture.png)
+![Overall architecture](Images/FullArchitecture.png)
 
 ## Repository Structure
 
