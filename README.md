@@ -194,4 +194,4 @@ The Flux queries used to build the dashboard are available in `docker_deployment
 
 ## Author
 
-Graduation thesis conducted at the **School of Information and Communications Technology, Hanoi University of Science and Technology**.
+This project is the graduation thesis project of **Trieu Kinh Quoc** (Student ID: **20225524**), conducted under the supervision of **Assoc. Prof. Dr. Pham Van Hai** at the **School of Information and Communications Technology, Hanoi University of Science and Technology**.
