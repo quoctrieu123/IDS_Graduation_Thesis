@@ -38,6 +38,16 @@ The data is chronologically ordered before splitting. A hybrid stratified and ti
 
 Preprocessed data is stored as Parquet or CSV files inside each use-case directory. Raw datasets are not included in this repository.
 
+### Preprocessed Dataset Downloads
+
+The preprocessed datasets used in the experiments can be downloaded from the following Google Drive folders:
+
+| Use case | Folder | Google Drive link |
+|---|---|---|
+| 1 | `http_based_preprocessed` | [Download](https://drive.google.com/drive/folders/1PQq5GPuusSG-_hsv2hBtqOei_AC_64ff?usp=sharing) |
+| 2 | `tcp_based_preprocessed` | [Download](https://drive.google.com/drive/folders/1VNV_FFIQkyCVYppzTRgWL0QwmKuPDN8W?usp=sharing) |
+| 3 | `CIC_IIOT_data_preprocessed` | [Download](https://drive.google.com/drive/folders/10HZ656RApIDO-7P8rTR91ygqo_txPXPv?usp=sharing) |
+
 ## Proposed Architecture
 
 ### 1. GAT Embedding–XGBoost
@@ -114,11 +124,12 @@ The main dependencies include:
 
 After installing the dependencies, run the notebooks in the following order where applicable:
 
-1. Preprocess the data.
-2. Train and evaluate the baseline models.
-3. Train GAT–XGBoost.
-4. Train Residual CNN–BiLSTM–Attention.
-5. Run the meta-learner and SOTA comparison notebooks.
+1. Download the required preprocessed dataset from the Google Drive links above and place it in the corresponding use-case directory.
+2. Preprocess the data if you want to regenerate the preprocessed files from the raw datasets.
+3. Train and evaluate the baseline models.
+4. Train GAT–XGBoost.
+5. Train Residual CNN–BiLSTM–Attention.
+6. Run the meta-learner and SOTA comparison notebooks.
 
 Some notebooks were developed with absolute local paths. Update the data and model path variables near the beginning of each notebook before running them in another environment.
 
